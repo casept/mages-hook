@@ -1,26 +1,61 @@
+import { vm_set_flag, vm_get_flag } from "./sg_steam.js";
+
+const vmFlagWorkSize = 1000;
+
 export function hookVMInstruction(opcode1stHalf: number, opcode2ndHalf: number, dispatchTable: NativePointer) {
 	// Hook the VM instructions
 	// Default hook - just print the opcode
 	const instructionFuncPtr = dispatchTable.add(opcode2ndHalf * Process.pointerSize).readPointer();
-	console.log(`Hooking VM instruction ${opcode1stHalf}:${opcode2ndHalf}`);
+
 	Interceptor.attach(instructionFuncPtr, {
 		onEnter(args) {
 			var ctx = new struct__SC3ThreadContext(args[0]);
 			this.ctx = ctx;
 			this.old_ip = ctx.layout.pc.readPointer();
-			console.log(`${opcode1stHalf}:${opcode2ndHalf}, Thread ID: ${ctx.layout.thread_id.readU32()}, IP: ${this.old_ip}, Script Buffer ID: ${ctx.layout.script_buffer_id.readU32()}`);
+			console.log(`[VM] ${opcode1stHalf}:${opcode2ndHalf}, Thread ID: ${ctx.layout.thread_id.readU32()}, IP: ${this.old_ip}, Script Buffer ID: ${ctx.layout.script_buffer_id.readU32()}`);
 			monitorThreadContext(args[0]);
 		},
 		onLeave(retval) {
 			const ip = this.ctx.layout.pc.readPointer();
 			const delta = ip.sub(this.old_ip).toUInt32();
 			// FIXME:
-			const instrBytesHex = hexdump(this.old_ip, {length: delta, ansi: true, header: false});
-			console.log(`IP before: ${this.old_ip}, IP after: ${ip}, IP delta: ${delta}`);
-			console.log(`Instruction bytes consumed: ${instrBytesHex}`);
+			const instrBytesHex = hexdump(this.old_ip, { length: delta, ansi: true, header: false });
+			console.log(`[VM] IP before: ${this.old_ip}, IP after: ${ip}, IP delta: ${delta}`);
+			console.log(`[VM] Instruction bytes consumed: ${instrBytesHex}`);
 			MemoryAccessMonitor.disable();
 		}
 	});
+}
+
+var watchedFlags = new Set<number>();
+
+Interceptor.attach(vm_set_flag, {
+	onEnter: function(args) {
+		const flagId = args[0].toUInt32();
+		const newValue = args[1].toUInt32();
+		if (watchedFlags.has(flagId)) {
+			console.log(`[VM] Flag ${flagId} set to ${newValue}`);
+		}
+	},
+});
+
+Interceptor.attach(vm_get_flag, {
+	onEnter(args) {
+		this.flagId = args[0].toUInt32();
+	},
+	onLeave(result) {
+		if (watchedFlags.has(this.flagId)) {
+			console.log(`[VM] Flag ${this.flagId} read (value: ${result.toUInt32()})`);
+		}
+	}
+});
+
+export function watchVMFlag(flagId: number) {
+	watchedFlags.add(flagId);
+}
+
+export function unwatchVMFlag(flagId: number) {
+	watchedFlags.delete(flagId);
 }
 
 /* Structure of the SC3 VM thread context (from Steins;Gate, should be same in other games) */
@@ -125,14 +160,16 @@ export class struct__SC3ThreadContext {
 
 function monitorThreadContext(ctxPtr: NativePointer) {
 	const ctx = new struct__SC3ThreadContext(ctxPtr);
-	console.log(`Thread ID: ${ctx.layout.thread_id.readU32()}, IP: ${ctx.layout.pc.readPointer()}, Script Buffer ID: ${ctx.layout.script_buffer_id.readU32()}`);
+	console.log(`[VM] Thread ID: ${ctx.layout.thread_id.readU32()}, IP: ${ctx.layout.pc.readPointer()}, Script Buffer ID: ${ctx.layout.script_buffer_id.readU32()}`);
 	const range: MemoryAccessRange = {
 		base: ctxPtr,
 		size: ctx.total_size,
 	};
-	const cb : MemoryAccessCallbacks = { onAccess: function(access: MemoryAccessDetails) {
-		onThreadCtxAccessCB(ctxPtr, access);
-	}};
+	const cb: MemoryAccessCallbacks = {
+		onAccess: function(access: MemoryAccessDetails) {
+			onThreadCtxAccessCB(ctxPtr, access);
+		}
+	};
 	MemoryAccessMonitor.enable(range, cb);
 }
 
@@ -141,7 +178,7 @@ function onThreadCtxAccessCB(ctx: NativePointer, access: MemoryAccessDetails) {
 	const ctxStruct = new struct__SC3ThreadContext(ctx);
 	for (const [name, offset] of Object.entries(ctxStruct.offsets)) {
 		if (access.address.equals(ctx.add(offset))) {
-			console.log(`Instruction accesses ctx field ${name}`);
+			console.log(`[VM] Instruction accesses ctx field ${name}`);
 			break;
 		}
 	}
