@@ -18,4 +18,6 @@ export const vm_set_flag = new NativeFunction(vm_set_flag_addr, 'void', ['uint32
 const vm_get_flag_addr = new NativePointer(0x00470560);
 export const vm_get_flag = new NativeFunction(vm_get_flag_addr, 'bool', ['uint32']);
 
+export const vm_globals = new NativePointer(0x026ee718); // ScrWork
+
 /* End game-specific memory locations and other constants. */

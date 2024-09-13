@@ -1,4 +1,4 @@
-import { vm_set_flag, vm_get_flag } from "./sg_steam.js";
+import { vm_set_flag, vm_get_flag, vm_globals } from "./sg_steam.js";
 
 const vmFlagWorkSize = 1000;
 
@@ -25,6 +25,42 @@ export function hookVMInstruction(opcode1stHalf: number, opcode2ndHalf: number, 
 			MemoryAccessMonitor.disable();
 		}
 	});
+}
+
+function installGlobalsWatchpoint(address: NativePointer, size: number, condition: string, name: string) {
+	// VM logic always runs on main thread
+	const thread = Process.enumerateThreads()[0];
+
+	Process.setExceptionHandler(e => {
+		if (Process.getCurrentThreadId() === thread.id &&
+			['breakpoint', 'single-step'].includes(e.type)) {
+			console.log(`[VM] Global ${name} referenced by ${e.context.pc}, value ${address.readInt()} (watched condition: ${condition})`);
+			const bt = Thread.backtrace(e.context, Backtracer.FUZZY);
+			const bt_str =
+				bt.map(DebugSymbol.fromAddress).join('\n');
+			console.log(`[VM] Backtrace: ${bt_str}`);
+			return true;
+		}
+
+		return false;
+	});
+
+	// FIXME: What does the 0 stand for?
+	// @ts-ignore : Not yet in types package
+	thread.setHardwareWatchpoint(0, address, size, condition);
+}
+
+export function watchVMGlobal(global: number, condition: string) {
+	// FIXME: Wait until after engine initialization (and the heap allocation actually exists)
+	const addr = vm_globals.readPointer().add(global * 4);
+	installGlobalsWatchpoint(addr, 4, condition, global.toString());
+}
+
+export function getVMGlobal(global: number): number {
+	const addr = vm_globals.readPointer().add(global * 4);
+	const val = addr.readInt();
+	console.log(`[VM] Global ${global} = ${val}`);
+	return val;
 }
 
 var watchedFlags = new Set<number>();
